@@ -16,13 +16,7 @@ import { v4 as uuidv4 } from "uuid";
 import { useAtom } from "jotai";
 import { agentsAtom, DEFAULT_AGENT_PARAMS } from "@/store/store";
 import MaterialIcons from "@react-native-vector-icons/material-icons";
-import {
-  Menu,
-  MenuOptions,
-  MenuOption,
-  MenuTrigger,
-  MenuProvider,
-} from "react-native-popup-menu";
+import { MenuView, MenuComponentRef } from "@react-native-menu/menu";
 import notifee, { EventType } from "@notifee/react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import TestConnectionButton from "./TestConnectionButton";
@@ -129,7 +123,7 @@ const Index = () => {
   }, [router]);
 
   return (
-    <MenuProvider>
+    <>
       <Stack.Screen
         options={{
           title: "Meet with AI",
@@ -145,16 +139,6 @@ const Index = () => {
         }}
       />
       <View style={styles.container}>
-        {/* <TouchableOpacity
-          onPress={() =>
-            router.push({
-              pathname: "/incoming-call/[id]",
-              params: { id: "abc" },
-            })
-          }
-        >
-          <Text>Real time call</Text>
-        </TouchableOpacity> */}
         <FlatList
           data={agents}
           keyExtractor={(item) => item.id}
@@ -175,39 +159,46 @@ const Index = () => {
                   {agent.params.prompt}
                 </Text>
               </View>
-              <Menu>
-                <MenuTrigger
-                  customStyles={{
-                    triggerWrapper: styles.menuButton,
+              <MenuView
+                isAnchoredToRight
+                actions={[
+                  {
+                    id: "delete",
+                    title: "削除",
+                    attributes: {
+                      destructive: true,
+                    },
+                  },
+                ]}
+                onPressAction={({ nativeEvent }) => {
+                  if (nativeEvent.event === "delete") {
+                    Alert.alert(
+                      "エージェント削除",
+                      `${agent.params.name}を削除しますか？`,
+                      [
+                        { text: "キャンセル", style: "cancel" },
+                        {
+                          text: "削除",
+                          style: "destructive",
+                          onPress: async () => await deleteAgent(agent.id),
+                        },
+                      ]
+                    );
+                  }
+                }}
+              >
+                <TouchableOpacity
+                  style={{
+                    width: 32,
+                    height: 32,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
                   }}
                 >
                   <MaterialIcons name="more-vert" size={24} color="#666" />
-                </MenuTrigger>
-                <MenuOptions
-                  customStyles={{
-                    optionsContainer: styles.menuOptions,
-                  }}
-                >
-                  <MenuOption
-                    onSelect={() => {
-                      Alert.alert(
-                        "エージェント削除",
-                        `${agent.params.name}を削除しますか？`,
-                        [
-                          { text: "キャンセル", style: "cancel" },
-                          {
-                            text: "削除",
-                            style: "destructive",
-                            onPress: async () => await deleteAgent(agent.id),
-                          },
-                        ]
-                      );
-                    }}
-                  >
-                    <Text style={styles.menuOptionText}>削除</Text>
-                  </MenuOption>
-                </MenuOptions>
-              </Menu>
+                </TouchableOpacity>
+              </MenuView>
             </TouchableOpacity>
           )}
           ListEmptyComponent={
@@ -236,7 +227,7 @@ const Index = () => {
           <Text style={styles.createButtonText}>新しいエージェントを作成</Text>
         </TouchableOpacity>
       </View>
-    </MenuProvider>
+    </>
   );
 };
 
