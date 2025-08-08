@@ -1,9 +1,7 @@
 import "react-native-get-random-values";
 import React, { useCallback, useEffect } from "react";
 import {
-  Text,
   View,
-  StyleSheet,
   AppRegistry,
   TouchableOpacity,
   Alert,
@@ -14,13 +12,71 @@ import IncomingCallNotification from "@/components/IncomingCallNotification";
 import { Stack, useRouter } from "expo-router";
 import { v4 as uuidv4 } from "uuid";
 import { useAtom } from "jotai";
-import { agentsAtom, DEFAULT_AGENT_PARAMS } from "@/store/store";
-import MaterialIcons from "@react-native-vector-icons/material-icons";
-import { MenuView, MenuComponentRef } from "@react-native-menu/menu";
+import { Agent, agentsAtom, DEFAULT_AGENT_PARAMS } from "@/store/store";
+import { MenuView, NativeActionEvent } from "@react-native-menu/menu";
 import notifee, { EventType } from "@notifee/react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import TestConnectionButton from "./TestConnectionButton";
-import ServerSettingsButton from "./ServerSettingsButton";
+import { Button } from "@/components/ui/button";
+import { Plus } from "@/lib/icons/Plus";
+import { Text } from "@/components/ui/text";
+import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
+import { EllipsisVertical } from "@/lib/icons/EllipsisVertical";
+import HeaderRight from "./HeaderRight";
+
+const AgentCard = ({
+  agent,
+  onPress,
+  deleteAgent,
+}: {
+  agent: Agent;
+  onPress: () => void;
+  deleteAgent: (id: string) => Promise<void>;
+}) => {
+  const menuAction = ({ nativeEvent }: NativeActionEvent) => {
+    if (nativeEvent.event === "delete") {
+      Alert.alert("エージェント削除", `${agent.params.name}を削除しますか？`, [
+        { text: "キャンセル", style: "cancel" },
+        {
+          text: "削除",
+          style: "destructive",
+          onPress: async () => await deleteAgent(agent.id),
+        },
+      ]);
+    }
+  };
+
+  return (
+    <TouchableOpacity onPress={onPress} className="mb-3">
+      <Card className="w-full">
+        <View className="w-full flex flex-row items-center">
+          <CardHeader className="flex-1">
+            <CardTitle>{agent.params.name}</CardTitle>
+          </CardHeader>
+          <MenuView
+            isAnchoredToRight
+            actions={[
+              {
+                id: "delete",
+                title: "削除",
+                attributes: {
+                  destructive: true,
+                },
+              },
+            ]}
+            onPressAction={menuAction}
+          >
+            <Button size="icon" variant="ghost" className="mr-4">
+              <EllipsisVertical className="size-4" />
+            </Button>
+          </MenuView>
+        </View>
+        <CardContent>
+          <Text>{agent.params.prompt}</Text>
+        </CardContent>
+      </Card>
+    </TouchableOpacity>
+  );
+};
 
 const Index = () => {
   const router = useRouter();
@@ -127,105 +183,52 @@ const Index = () => {
       <Stack.Screen
         options={{
           title: "Meet with AI",
-          headerRight: () => (
-            <View style={styles.headerActions}>
-              <TestConnectionButton />
-              <ServerSettingsButton />
-              <TouchableOpacity onPress={() => setAgents([])}>
-                <MaterialIcons name="refresh" size={24} color="#000" />
-              </TouchableOpacity>
-            </View>
-          ),
+          headerRight: () => <HeaderRight clearAgents={() => setAgents([])} />,
         }}
       />
-      <View style={styles.container}>
+      <View className="flex-1 bg-background p-4">
         <FlatList
           data={agents}
           keyExtractor={(item) => item.id}
-          style={styles.agentList}
           renderItem={({ item: agent }) => (
-            <TouchableOpacity
-              style={styles.agentCard}
+            <AgentCard
+              agent={agent}
               onPress={() => {
                 router.push({
                   pathname: "/agent/[id]",
                   params: { id: agent.id },
                 });
               }}
-            >
-              <View style={styles.agentInfo}>
-                <Text style={styles.agentName}>{agent.params.name}</Text>
-                <Text style={styles.agentPrompt} numberOfLines={2}>
-                  {agent.params.prompt}
-                </Text>
-              </View>
-              <MenuView
-                isAnchoredToRight
-                actions={[
-                  {
-                    id: "delete",
-                    title: "削除",
-                    attributes: {
-                      destructive: true,
-                    },
-                  },
-                ]}
-                onPressAction={({ nativeEvent }) => {
-                  if (nativeEvent.event === "delete") {
-                    Alert.alert(
-                      "エージェント削除",
-                      `${agent.params.name}を削除しますか？`,
-                      [
-                        { text: "キャンセル", style: "cancel" },
-                        {
-                          text: "削除",
-                          style: "destructive",
-                          onPress: async () => await deleteAgent(agent.id),
-                        },
-                      ]
-                    );
-                  }
-                }}
-              >
-                <TouchableOpacity
-                  style={{
-                    width: 32,
-                    height: 32,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <MaterialIcons name="more-vert" size={24} color="#666" />
-                </TouchableOpacity>
-              </MenuView>
-            </TouchableOpacity>
+              deleteAgent={deleteAgent}
+            />
           )}
           ListEmptyComponent={
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyText}>まだエージェントがありません</Text>
+            <View className="flex items-center justify-center">
+              <Text className="text-muted-foreground">
+                まだエージェントがありません
+              </Text>
             </View>
           }
         />
 
-        <TouchableOpacity
-          style={styles.createButton}
-          onPress={async () => {
-            const id = await createAgent();
-            router.push({
-              pathname: "/agent/[id]",
-              params: { id },
-            });
-          }}
-        >
-          <MaterialIcons
-            name="add"
-            size={24}
-            color="#fff"
-            style={styles.createIcon}
-          />
-          <Text style={styles.createButtonText}>新しいエージェントを作成</Text>
-        </TouchableOpacity>
+        <View className="absolute left-0 right-0 bottom-8 flex-col items-center">
+          <Button
+            onPress={async () => {
+              const id = await createAgent();
+              router.push({
+                pathname: "/agent/[id]",
+                params: { id },
+              });
+            }}
+            size="lg"
+            className="flex flex-row gap-4 items-center pl-4"
+          >
+            <Plus className="text-primary-foreground" />
+            <Text className="text-primary-foreground font-bold text-lg">
+              エージェントを作成
+            </Text>
+          </Button>
+        </View>
       </View>
     </>
   );
@@ -268,91 +271,3 @@ AppRegistry.registerComponent(
 );
 
 export default Index;
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#f5f5f5",
-    padding: 20,
-  },
-  agentList: {
-    flex: 1,
-  },
-  agentCard: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  agentInfo: {
-    flex: 1,
-    marginRight: 12,
-  },
-  agentName: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#333",
-    marginBottom: 4,
-  },
-  agentPrompt: {
-    fontSize: 14,
-    color: "#666",
-    lineHeight: 20,
-  },
-  menuButton: {
-    padding: 8,
-    marginLeft: 8,
-  },
-  emptyState: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    paddingVertical: 60,
-  },
-  emptyText: {
-    fontSize: 16,
-    color: "#999",
-    textAlign: "center",
-  },
-  createButton: {
-    backgroundColor: "#9C27B0",
-    borderRadius: 12,
-    padding: 16,
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "center",
-    marginTop: 16,
-  },
-  createIcon: {
-    marginRight: 8,
-  },
-  createButtonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "bold",
-  },
-  headerActions: {
-    flexDirection: "row",
-    gap: 16,
-    marginRight: 8,
-  },
-  // Menu styles
-  menuOptions: {
-    backgroundColor: "#fff",
-    borderRadius: 8,
-    padding: 4,
-  },
-  menuOptionText: {
-    fontSize: 16,
-    color: "#F44336",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-});
