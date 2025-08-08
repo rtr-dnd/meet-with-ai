@@ -1,217 +1,91 @@
-import React, { useState, useEffect } from "react";
+import "react-native-get-random-values";
+import React, { useState } from "react";
 import {
   Text,
   View,
-  TouchableOpacity,
   StyleSheet,
-  Alert,
-  Modal,
   AppRegistry,
-  AppState,
+  TouchableOpacity,
+  Alert,
   TextInput,
+  Modal,
+  FlatList,
 } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { MaterialIcons } from "@react-native-vector-icons/material-icons";
-import RealtimeCall from "../components/RealtimeCall";
-import { useNotifee } from "../hooks/useNotifee";
-import notifee, { EventType } from "@notifee/react-native";
 import IncomingCallNotification from "@/components/IncomingCallNotification";
-import { Stack } from "expo-router";
-import { ToastAndroid, Platform } from "react-native";
-enum VisibleScreen {
-  Default,
-  RealtimeCall,
-  IncomingCall,
-}
-
-const DEFAULT_AGENT_NAME = "AIエージェント";
-const DEFAULT_PROMPT =
-  "あなたはAIエージェントです。ユーザーの質問に答え、会話を続けてください。日本語で話してください。この文章を読んだら、「インストラクションを参照しました」と答えてください。";
-
-enum ServerType {
-  Local = "local",
-  Vercel = "vercel",
-}
-
-const VERCEL_URL = "https://meet-with-ai-server.vercel.app"; // TODO: Replace with actual Vercel URL
-const DEFAULT_LOCAL_URL = "http://192.168.11.6:3001";
+import { Stack, useRouter } from "expo-router";
+import { v4 as uuidv4 } from "uuid";
+import { useAtom, useAtomValue } from "jotai";
+import {
+  AgentParams,
+  agentsAtom,
+  currentServerUrlAtom,
+  DEFAULT_AGENT_PARAMS,
+  localUrlAtom,
+  ServerType,
+  serverTypeAtom,
+  VERCEL_URL,
+} from "@/store/store";
+import MaterialIcons from "@react-native-vector-icons/material-icons";
+import {
+  Menu,
+  MenuOptions,
+  MenuOption,
+  MenuTrigger,
+  MenuProvider,
+} from "react-native-popup-menu";
 
 const Index = () => {
-  const [visibleScreen, setVisibleScreen] = useState<VisibleScreen>(
-    VisibleScreen.Default
-  );
-  const { scheduleIncomingCall, cancelIncomingCall } = useNotifee();
-  const [agentName, setAgentName] = useState(DEFAULT_AGENT_NAME);
-  const [prompt, setPrompt] = useState(DEFAULT_PROMPT);
-  const [serverType, setServerType] = useState<ServerType>(ServerType.Local);
-  const [localUrl, setLocalUrl] = useState(DEFAULT_LOCAL_URL);
+  const router = useRouter();
+  const [agents, setAgents] = useAtom(agentsAtom);
 
-  // Load saved data on app start
-  useEffect(() => {
-    const loadSavedData = async () => {
-      try {
-        const savedAgentName = await AsyncStorage.getItem("agentName");
-        const savedPrompt = await AsyncStorage.getItem("prompt");
-        const savedServerType = await AsyncStorage.getItem("serverType");
-        const savedLocalUrl = await AsyncStorage.getItem("localUrl");
-
-        if (savedAgentName) setAgentName(savedAgentName);
-        if (savedPrompt) setPrompt(savedPrompt);
-        if (savedServerType) setServerType(savedServerType as ServerType);
-        if (savedLocalUrl) setLocalUrl(savedLocalUrl);
-      } catch (error) {
-        console.error("Failed to load saved data:", error);
-      }
-    };
-
-    loadSavedData();
-  }, []);
-
-  // Save data when changed
-  const updateAgentName = async (name: string) => {
-    setAgentName(name);
-    try {
-      await AsyncStorage.setItem("agentName", name);
-    } catch (error) {
-      console.error("Failed to save agent name:", error);
-    }
+  const createAgent = async () => {
+    const id = uuidv4();
+    await setAgents([
+      ...agents,
+      {
+        id: id,
+        params: DEFAULT_AGENT_PARAMS,
+      },
+    ]);
+    return id;
   };
 
-  const updatePrompt = async (newPrompt: string) => {
-    setPrompt(newPrompt);
-    try {
-      await AsyncStorage.setItem("prompt", newPrompt);
-    } catch (error) {
-      console.error("Failed to save prompt:", error);
-    }
+  const deleteAgent = async (id: string) => {
+    const updatedAgents = agents.filter((agent) => agent.id !== id);
+    await setAgents(updatedAgents);
   };
 
-  const updateServerType = async (type: ServerType) => {
-    setServerType(type);
-    try {
-      await AsyncStorage.setItem("serverType", type);
-    } catch (error) {
-      console.error("Failed to save server type:", error);
-    }
-  };
-
-  const updateLocalUrl = async (url: string) => {
-    setLocalUrl(url);
-    try {
-      await AsyncStorage.setItem("localUrl", url);
-    } catch (error) {
-      console.error("Failed to save local URL:", error);
-    }
-  };
-
-  const getCurrentServerUrl = () => {
-    return serverType === ServerType.Vercel ? VERCEL_URL : localUrl;
-  };
-
-  // check background call status
-  const checkBackgroundCall = async () => {
-    try {
-      const shouldShowCall = await AsyncStorage.getItem(
-        "shouldShowIncomingCall"
-      );
-      const shouldStartCall = await AsyncStorage.getItem(
-        "shouldStartRealtimeCall"
-      );
-
-      if (shouldStartCall === "true") {
-        console.log("Starting realtime call directly from background");
-        setVisibleScreen(VisibleScreen.RealtimeCall);
-      } else if (shouldShowCall === "true") {
-        setVisibleScreen(VisibleScreen.IncomingCall);
-      }
-
-      await AsyncStorage.removeItem("shouldStartRealtimeCall");
-      await AsyncStorage.removeItem("shouldShowIncomingCall");
-    } catch (error) {
-      console.log("Error checking background call:", error);
-    }
-  };
-
-  useEffect(() => {
-    checkBackgroundCall();
-
-    // watch for app state changes
-    const handleAppStateChange = (nextAppState: string) => {
-      console.log("AppState changed to:", nextAppState);
-      if (nextAppState === "active") {
-        console.log("App became active, checking background call");
-        checkBackgroundCall();
-      }
-    };
-
-    const subscription = AppState.addEventListener(
-      "change",
-      handleAppStateChange
+  const updateAgent = async (id: string, fragment: Partial<AgentParams>) => {
+    const updatedAgents = agents.map((agent) =>
+      agent.id === id
+        ? { ...agent, params: { ...agent.params, ...fragment } }
+        : agent
     );
+    await setAgents(updatedAgents);
+  };
 
-    return () => {
-      subscription?.remove();
-    };
-  }, []);
-
-  useEffect(() => {
-    const unsubscribe = notifee.onForegroundEvent(({ type, detail }) => {
-      console.log("Foreground event:", type, detail);
-
-      if (type === EventType.ACTION_PRESS) {
-        console.log("Action pressed:", detail.pressAction?.id);
-        if (detail.pressAction?.id === "answer") {
-          console.log("Answer action - starting call");
-          cancelIncomingCall();
-          setVisibleScreen(VisibleScreen.RealtimeCall);
-        } else if (detail.pressAction?.id === "decline") {
-          console.log("Decline action - dismissing call");
-          cancelIncomingCall();
-          setVisibleScreen(VisibleScreen.Default);
-        }
-      }
-    });
-
-    return () => {
-      unsubscribe();
-    };
-  }, [cancelIncomingCall]);
+  const [serverType, setServerType] = useAtom(serverTypeAtom);
+  const [localUrl, setLocalUrl] = useAtom(localUrlAtom);
+  const currentServerUrl = useAtomValue(currentServerUrlAtom);
+  const [showServerSettings, setShowServerSettings] = useState<boolean>(false);
 
   const testServerConnection = async () => {
     try {
-      const serverUrl = getCurrentServerUrl();
-      const response = await fetch(`${serverUrl}/api/test`);
+      const response = await fetch(`${currentServerUrl}/api/test`);
       const data = await response.json();
-      Alert.alert("サーバテスト", `${data.message}\n\nURL: ${serverUrl}`);
+      Alert.alert(
+        "サーバテスト",
+        `${data.message}\n\nURL: ${currentServerUrl}`
+      );
     } catch (error) {
       Alert.alert(
         "エラー",
-        `サーバに接続できませんでした\n\nURL: ${getCurrentServerUrl()}`
+        `サーバに接続できませんでした\n\nURL: ${currentServerUrl}`
       );
     }
   };
-
-  const showToast = (message: string) => {
-    if (Platform.OS === "android") {
-      ToastAndroid.show(message, ToastAndroid.SHORT);
-    } else {
-      // Fallback for iOS (you could use a toast library)
-      console.log(message);
-    }
-  };
-
-  const triggerIncomingCall = async () => {
-    try {
-      showToast("10秒後に着信通知を表示します");
-      await scheduleIncomingCall(agentName);
-    } catch (error) {
-      console.log("Error scheduling notification:", error);
-      Alert.alert("エラー", "通知の設定に失敗しました");
-    }
-  };
-
   return (
-    <>
+    <MenuProvider>
       <Stack.Screen
         options={{
           title: "Meet with AI",
@@ -220,138 +94,158 @@ const Index = () => {
               <TouchableOpacity onPress={testServerConnection}>
                 <MaterialIcons name="warning" size={24} color="#000" />
               </TouchableOpacity>
+              <TouchableOpacity onPress={() => setShowServerSettings(true)}>
+                <MaterialIcons name="cloud-queue" size={24} color="#000" />
+              </TouchableOpacity>
             </View>
           ),
         }}
       />
       <View style={styles.container}>
-        <View style={styles.inputContainer}>
-          <Text style={styles.inputLabel}>サーバー設定</Text>
-          <View style={styles.radioContainer}>
+        <FlatList
+          data={agents}
+          keyExtractor={(item) => item.id}
+          style={styles.agentList}
+          renderItem={({ item: agent }) => (
             <TouchableOpacity
-              style={styles.radioOption}
-              onPress={() => updateServerType(ServerType.Local)}
+              style={styles.agentCard}
+              onPress={() => {
+                router.push({
+                  pathname: "/agent/[id]",
+                  params: { id: agent.id },
+                });
+              }}
             >
-              <View
-                style={[
-                  styles.radio,
-                  serverType === ServerType.Local && styles.radioSelected,
-                ]}
-              />
-              <Text style={styles.radioText}>ローカル</Text>
+              <View style={styles.agentInfo}>
+                <Text style={styles.agentName}>{agent.params.name}</Text>
+                <Text style={styles.agentPrompt} numberOfLines={2}>
+                  {agent.params.prompt}
+                </Text>
+              </View>
+              <Menu>
+                <MenuTrigger
+                  customStyles={{
+                    triggerWrapper: styles.menuButton,
+                  }}
+                >
+                  <MaterialIcons name="more-vert" size={24} color="#666" />
+                </MenuTrigger>
+                <MenuOptions
+                  customStyles={{
+                    optionsContainer: styles.menuOptions,
+                  }}
+                >
+                  <MenuOption
+                    onSelect={() => {
+                      Alert.alert(
+                        "エージェント削除",
+                        `${agent.params.name}を削除しますか？`,
+                        [
+                          { text: "キャンセル", style: "cancel" },
+                          {
+                            text: "削除",
+                            style: "destructive",
+                            onPress: async () => await deleteAgent(agent.id),
+                          },
+                        ]
+                      );
+                    }}
+                  >
+                    <Text style={styles.menuOptionText}>削除</Text>
+                  </MenuOption>
+                </MenuOptions>
+              </Menu>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.radioOption}
-              onPress={() => updateServerType(ServerType.Vercel)}
-            >
-              <View
-                style={[
-                  styles.radio,
-                  serverType === ServerType.Vercel && styles.radioSelected,
-                ]}
-              />
-              <Text style={styles.radioText}>Vercel</Text>
-            </TouchableOpacity>
-          </View>
-          {serverType === ServerType.Local && (
-            <TextInput
-              value={localUrl}
-              onChangeText={updateLocalUrl}
-              placeholder="ローカルサーバーURL..."
-              style={styles.input}
-            />
           )}
-          {serverType === ServerType.Vercel && (
-            <Text style={styles.urlDisplay}>{VERCEL_URL}</Text>
-          )}
-        </View>
+          ListEmptyComponent={
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyText}>まだエージェントがありません</Text>
+            </View>
+          }
+        />
 
-        <View style={styles.inputContainer}>
-          <Text style={styles.inputLabel}>エージェント名</Text>
-          <TextInput
-            value={agentName}
-            onChangeText={updateAgentName}
-            placeholder="エージェント名を入力..."
-            style={styles.input}
-          />
-        </View>
-        <View
-          style={{
-            ...styles.inputContainer,
-            flex: 1,
+        <TouchableOpacity
+          style={styles.createButton}
+          onPress={async () => {
+            const id = await createAgent();
+            router.push({
+              pathname: "/agent/[id]",
+              params: { id },
+            });
           }}
         >
-          <Text style={styles.inputLabel}>プロンプト</Text>
-          <TextInput
-            multiline
-            value={prompt}
-            onChangeText={updatePrompt}
-            placeholder="プロンプトを入力..."
-            style={styles.input}
-          />
-        </View>
-        <TouchableOpacity
-          style={styles.incomingCallButton}
-          onPress={triggerIncomingCall}
-        >
-          <Text style={styles.incomingCallButtonText}>10秒後に通話を予約</Text>
+          <MaterialIcons name="add" size={24} color="#fff" style={styles.createIcon} />
+          <Text style={styles.createButtonText}>
+            新しいエージェントを作成
+          </Text>
         </TouchableOpacity>
       </View>
 
       <Modal
-        visible={visibleScreen === VisibleScreen.IncomingCall}
+        visible={showServerSettings}
         animationType="fade"
-        presentationStyle="fullScreen"
+        transparent={true}
+        onRequestClose={() => setShowServerSettings(false)}
       >
-        <IncomingCallNotification
-          onAnswer={() => {
-            setVisibleScreen(VisibleScreen.RealtimeCall);
-          }}
-          onDecline={() => {
-            setVisibleScreen(VisibleScreen.Default);
-          }}
-          callerName={agentName}
-        />
-      </Modal>
+        <View style={styles.dialogOverlay}>
+          <View style={styles.dialogContainer}>
+            <Text style={styles.dialogTitle}>サーバー設定</Text>
 
-      <Modal
-        visible={visibleScreen === VisibleScreen.RealtimeCall}
-        animationType="slide"
-        presentationStyle="fullScreen"
-      >
-        <RealtimeCall
-          onClose={() => setVisibleScreen(VisibleScreen.Default)}
-          prompt={prompt}
-          agentName={agentName}
-          serverUrl={getCurrentServerUrl()}
-        />
+            <View style={styles.dialogContent}>
+              <View style={styles.radioContainer}>
+                <TouchableOpacity
+                  style={styles.radioOption}
+                  onPress={() => setServerType(ServerType.Local)}
+                >
+                  <View
+                    style={[
+                      styles.radio,
+                      serverType === ServerType.Local && styles.radioSelected,
+                    ]}
+                  />
+                  <Text style={styles.radioText}>ローカル</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.radioOption}
+                  onPress={() => setServerType(ServerType.Vercel)}
+                >
+                  <View
+                    style={[
+                      styles.radio,
+                      serverType === ServerType.Vercel && styles.radioSelected,
+                    ]}
+                  />
+                  <Text style={styles.radioText}>Vercel</Text>
+                </TouchableOpacity>
+              </View>
+
+              {serverType === ServerType.Local && (
+                <TextInput
+                  value={localUrl}
+                  onChangeText={setLocalUrl}
+                  placeholder="ローカルサーバーURL..."
+                  style={styles.dialogInput}
+                />
+              )}
+              {serverType === ServerType.Vercel && (
+                <Text style={styles.urlDisplay}>{VERCEL_URL}</Text>
+              )}
+            </View>
+
+            <View style={styles.dialogButtons}>
+              <TouchableOpacity
+                style={styles.dialogButton}
+                onPress={() => setShowServerSettings(false)}
+              >
+                <Text style={styles.dialogButtonText}>OK</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
       </Modal>
-    </>
+    </MenuProvider>
   );
 };
-
-notifee.onBackgroundEvent(async ({ type, detail }) => {
-  console.log("Background event:", type, detail);
-
-  if (type === EventType.ACTION_PRESS) {
-    if (detail.pressAction?.id === "answer") {
-      await AsyncStorage.setItem("shouldStartRealtimeCall", "true");
-      console.log("Answer pressed in background, setting realtime call flag");
-    } else if (detail.pressAction?.id === "decline") {
-      await notifee.cancelAllNotifications();
-      console.log("Decline pressed in background");
-    }
-  }
-
-  if (
-    (type === EventType.PRESS || type === EventType.DELIVERED) &&
-    detail.notification?.android?.fullScreenAction?.id ===
-      "incoming-call-notification"
-  ) {
-    console.log("Fullscreen notification triggered in background");
-    await AsyncStorage.setItem("shouldShowIncomingCall", "true");
-  }
-});
 
 AppRegistry.registerComponent(
   "incoming-call-notification",
@@ -363,37 +257,129 @@ export default Index;
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
     backgroundColor: "#f5f5f5",
     padding: 20,
   },
-  headerActions: {
+  agentList: {
+    flex: 1,
+  },
+  agentCard: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
     flexDirection: "row",
-    gap: 8,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  agentInfo: {
+    flex: 1,
+    marginRight: 12,
+  },
+  agentName: {
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "#333",
+    marginBottom: 4,
+  },
+  agentPrompt: {
+    fontSize: 14,
+    color: "#666",
+    lineHeight: 20,
+  },
+  menuButton: {
+    padding: 8,
+    marginLeft: 8,
+  },
+  emptyState: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 60,
+  },
+  emptyText: {
+    fontSize: 16,
+    color: "#999",
+    textAlign: "center",
+  },
+  createButton: {
+    backgroundColor: "#9C27B0",
+    borderRadius: 12,
+    padding: 16,
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "center",
+    marginTop: 16,
+  },
+  createIcon: {
     marginRight: 8,
   },
-  inputContainer: {
-    width: "100%",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "flex-start",
-    gap: 2,
-    marginBottom: 16,
-  },
-  inputLabel: {
-    fontSize: 12,
-    fontWeight: "bold",
-    opacity: 0.5,
-    paddingHorizontal: 4,
-  },
-  input: {
-    width: "100%",
-    paddingVertical: 8,
-    paddingHorizontal: 0,
+  createButtonText: {
+    color: "#fff",
     fontSize: 16,
+    fontWeight: "bold",
   },
+  headerActions: {
+    flexDirection: "row",
+    gap: 16,
+    marginRight: 8,
+  },
+  // Dialog styles
+  dialogOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  dialogContainer: {
+    backgroundColor: "#fff",
+    borderRadius: 8,
+    minWidth: 280,
+    maxWidth: "100%",
+  },
+  dialogTitle: {
+    fontSize: 18,
+    fontWeight: "500",
+    color: "#333",
+    padding: 24,
+    paddingBottom: 16,
+  },
+  dialogContent: {
+    paddingHorizontal: 24,
+    paddingBottom: 16,
+  },
+  dialogInput: {
+    borderWidth: 1,
+    borderColor: "#ddd",
+    borderRadius: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 16,
+    marginTop: 8,
+  },
+  dialogButtons: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+  },
+  dialogButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 4,
+  },
+  dialogButtonText: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: "#007AFF",
+    textTransform: "uppercase",
+  },
+  // Radio button styles
   radioContainer: {
     flexDirection: "row",
     gap: 16,
@@ -424,16 +410,16 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
     marginTop: 4,
   },
-  incomingCallButton: {
-    backgroundColor: "#000000",
-    paddingHorizontal: 40,
-    paddingVertical: 16,
-    borderRadius: 25,
-    marginTop: 16,
+  // Menu styles
+  menuOptions: {
+    backgroundColor: "#fff",
+    borderRadius: 8,
+    padding: 4,
   },
-  incomingCallButtonText: {
-    color: "white",
-    fontSize: 18,
-    fontWeight: "bold",
+  menuOptionText: {
+    fontSize: 16,
+    color: "#F44336",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
 });
