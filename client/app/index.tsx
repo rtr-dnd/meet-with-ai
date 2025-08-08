@@ -1,5 +1,5 @@
 import "react-native-get-random-values";
-import React, { useState } from "react";
+import React, { useCallback, useEffect } from "react";
 import {
   Text,
   View,
@@ -7,24 +7,14 @@ import {
   AppRegistry,
   TouchableOpacity,
   Alert,
-  TextInput,
-  Modal,
   FlatList,
+  AppState,
 } from "react-native";
 import IncomingCallNotification from "@/components/IncomingCallNotification";
 import { Stack, useRouter } from "expo-router";
 import { v4 as uuidv4 } from "uuid";
-import { useAtom, useAtomValue } from "jotai";
-import {
-  AgentParams,
-  agentsAtom,
-  currentServerUrlAtom,
-  DEFAULT_AGENT_PARAMS,
-  localUrlAtom,
-  ServerType,
-  serverTypeAtom,
-  VERCEL_URL,
-} from "@/store/store";
+import { useAtom } from "jotai";
+import { agentsAtom, DEFAULT_AGENT_PARAMS } from "@/store/store";
 import MaterialIcons from "@react-native-vector-icons/material-icons";
 import {
   Menu,
@@ -33,6 +23,10 @@ import {
   MenuTrigger,
   MenuProvider,
 } from "react-native-popup-menu";
+import notifee, { EventType } from "@notifee/react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import TestConnectionButton from "./TestConnectionButton";
+import ServerSettingsButton from "./ServerSettingsButton";
 
 const Index = () => {
   const router = useRouter();
@@ -55,35 +49,85 @@ const Index = () => {
     await setAgents(updatedAgents);
   };
 
-  const updateAgent = async (id: string, fragment: Partial<AgentParams>) => {
-    const updatedAgents = agents.map((agent) =>
-      agent.id === id
-        ? { ...agent, params: { ...agent.params, ...fragment } }
-        : agent
-    );
-    await setAgents(updatedAgents);
-  };
-
-  const [serverType, setServerType] = useAtom(serverTypeAtom);
-  const [localUrl, setLocalUrl] = useAtom(localUrlAtom);
-  const currentServerUrl = useAtomValue(currentServerUrlAtom);
-  const [showServerSettings, setShowServerSettings] = useState<boolean>(false);
-
-  const testServerConnection = async () => {
+  const checkBackgroundCall = useCallback(async () => {
     try {
-      const response = await fetch(`${currentServerUrl}/api/test`);
-      const data = await response.json();
-      Alert.alert(
-        "サーバテスト",
-        `${data.message}\n\nURL: ${currentServerUrl}`
+      const shouldShowCallId = await AsyncStorage.getItem(
+        "shouldShowIncomingCall"
       );
+      const shouldStartCallId = await AsyncStorage.getItem(
+        "shouldStartRealtimeCall"
+      );
+      console.log(
+        `shouldShowCall: ${shouldShowCallId}, shouldStartCall: ${shouldStartCallId}`
+      );
+
+      if (shouldStartCallId) {
+        console.log("Starting realtime call directly from background");
+        router.push({
+          pathname: "/realtime-call/[id]",
+          params: { id: shouldStartCallId },
+        });
+      } else if (shouldShowCallId) {
+        console.log("Showing notification");
+        router.push({
+          pathname: "/incoming-call/[id]",
+          params: { id: shouldShowCallId },
+        });
+      }
+
+      await AsyncStorage.removeItem("shouldStartRealtimeCall");
+      await AsyncStorage.removeItem("shouldShowIncomingCall");
     } catch (error) {
-      Alert.alert(
-        "エラー",
-        `サーバに接続できませんでした\n\nURL: ${currentServerUrl}`
-      );
+      console.log("Error checking background call:", error);
     }
-  };
+  }, [router]);
+
+  useEffect(() => {
+    checkBackgroundCall();
+
+    // watch for app state changes
+    const handleAppStateChange = (nextAppState: string) => {
+      console.log("AppState changed to:", nextAppState);
+      if (nextAppState === "active") {
+        console.log("App became active, checking background call");
+        checkBackgroundCall();
+      }
+    };
+
+    const subscription = AppState.addEventListener(
+      "change",
+      handleAppStateChange
+    );
+
+    return () => {
+      subscription?.remove();
+    };
+  }, [checkBackgroundCall]);
+
+  useEffect(() => {
+    const unsubscribe = notifee.onForegroundEvent(({ type, detail }) => {
+      console.log("Foreground event:", type, detail);
+
+      if (type === EventType.ACTION_PRESS) {
+        console.log("Action pressed:", detail.pressAction?.id);
+        if (detail.pressAction?.id.startsWith("answer_")) {
+          console.log("Answer action - starting call");
+          const id = detail.pressAction.id.split("_")[1];
+          router.push({
+            pathname: "/realtime-call/[id]",
+            params: { id: id },
+          });
+        } else if (detail.pressAction?.id.startsWith("decline_")) {
+          console.log("Decline action - dismissing call");
+        }
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [router]);
+
   return (
     <MenuProvider>
       <Stack.Screen
@@ -91,17 +135,26 @@ const Index = () => {
           title: "Meet with AI",
           headerRight: () => (
             <View style={styles.headerActions}>
-              <TouchableOpacity onPress={testServerConnection}>
-                <MaterialIcons name="warning" size={24} color="#000" />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => setShowServerSettings(true)}>
-                <MaterialIcons name="cloud-queue" size={24} color="#000" />
+              <TestConnectionButton />
+              <ServerSettingsButton />
+              <TouchableOpacity onPress={() => setAgents([])}>
+                <MaterialIcons name="refresh" size={24} color="#000" />
               </TouchableOpacity>
             </View>
           ),
         }}
       />
       <View style={styles.container}>
+        {/* <TouchableOpacity
+          onPress={() =>
+            router.push({
+              pathname: "/incoming-call/[id]",
+              params: { id: "abc" },
+            })
+          }
+        >
+          <Text>Real time call</Text>
+        </TouchableOpacity> */}
         <FlatList
           data={agents}
           keyExtractor={(item) => item.id}
@@ -174,78 +227,49 @@ const Index = () => {
             });
           }}
         >
-          <MaterialIcons name="add" size={24} color="#fff" style={styles.createIcon} />
-          <Text style={styles.createButtonText}>
-            新しいエージェントを作成
-          </Text>
+          <MaterialIcons
+            name="add"
+            size={24}
+            color="#fff"
+            style={styles.createIcon}
+          />
+          <Text style={styles.createButtonText}>新しいエージェントを作成</Text>
         </TouchableOpacity>
       </View>
-
-      <Modal
-        visible={showServerSettings}
-        animationType="fade"
-        transparent={true}
-        onRequestClose={() => setShowServerSettings(false)}
-      >
-        <View style={styles.dialogOverlay}>
-          <View style={styles.dialogContainer}>
-            <Text style={styles.dialogTitle}>サーバー設定</Text>
-
-            <View style={styles.dialogContent}>
-              <View style={styles.radioContainer}>
-                <TouchableOpacity
-                  style={styles.radioOption}
-                  onPress={() => setServerType(ServerType.Local)}
-                >
-                  <View
-                    style={[
-                      styles.radio,
-                      serverType === ServerType.Local && styles.radioSelected,
-                    ]}
-                  />
-                  <Text style={styles.radioText}>ローカル</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.radioOption}
-                  onPress={() => setServerType(ServerType.Vercel)}
-                >
-                  <View
-                    style={[
-                      styles.radio,
-                      serverType === ServerType.Vercel && styles.radioSelected,
-                    ]}
-                  />
-                  <Text style={styles.radioText}>Vercel</Text>
-                </TouchableOpacity>
-              </View>
-
-              {serverType === ServerType.Local && (
-                <TextInput
-                  value={localUrl}
-                  onChangeText={setLocalUrl}
-                  placeholder="ローカルサーバーURL..."
-                  style={styles.dialogInput}
-                />
-              )}
-              {serverType === ServerType.Vercel && (
-                <Text style={styles.urlDisplay}>{VERCEL_URL}</Text>
-              )}
-            </View>
-
-            <View style={styles.dialogButtons}>
-              <TouchableOpacity
-                style={styles.dialogButton}
-                onPress={() => setShowServerSettings(false)}
-              >
-                <Text style={styles.dialogButtonText}>OK</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </MenuProvider>
   );
 };
+
+notifee.onBackgroundEvent(async ({ type, detail }) => {
+  console.log("Background event:", type, detail);
+  console.log(
+    "fullscreen action: ",
+    detail.notification?.android?.fullScreenAction?.id
+  );
+
+  if (type === EventType.ACTION_PRESS) {
+    if (detail.pressAction?.id.startsWith("answer_")) {
+      const id = detail.pressAction.id.split("_")[1];
+      await AsyncStorage.setItem("shouldStartRealtimeCall", id);
+      console.log("Answer pressed in background, setting realtime call flag");
+    } else if (detail.pressAction?.id.startsWith("decline_")) {
+      const id = detail.pressAction.id.split("_")[1];
+      await notifee.cancelNotification(id);
+      console.log("Decline pressed in background");
+    }
+  }
+
+  if (
+    (type === EventType.PRESS || type === EventType.DELIVERED) &&
+    detail.notification?.android?.fullScreenAction?.id.startsWith(
+      "incoming-call-notification_"
+    )
+  ) {
+    const id = detail.notification.android.fullScreenAction.id.split("_")[1];
+    console.log("Fullscreen notification triggered in background");
+    await AsyncStorage.setItem("shouldShowIncomingCall", id);
+  }
+});
 
 AppRegistry.registerComponent(
   "incoming-call-notification",
@@ -327,88 +351,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 16,
     marginRight: 8,
-  },
-  // Dialog styles
-  dialogOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 20,
-  },
-  dialogContainer: {
-    backgroundColor: "#fff",
-    borderRadius: 8,
-    minWidth: 280,
-    maxWidth: "100%",
-  },
-  dialogTitle: {
-    fontSize: 18,
-    fontWeight: "500",
-    color: "#333",
-    padding: 24,
-    paddingBottom: 16,
-  },
-  dialogContent: {
-    paddingHorizontal: 24,
-    paddingBottom: 16,
-  },
-  dialogInput: {
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 4,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    fontSize: 16,
-    marginTop: 8,
-  },
-  dialogButtons: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    paddingHorizontal: 8,
-    paddingVertical: 8,
-  },
-  dialogButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 4,
-  },
-  dialogButtonText: {
-    fontSize: 14,
-    fontWeight: "500",
-    color: "#007AFF",
-    textTransform: "uppercase",
-  },
-  // Radio button styles
-  radioContainer: {
-    flexDirection: "row",
-    gap: 16,
-    marginBottom: 8,
-  },
-  radioOption: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  radio: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: "#ccc",
-  },
-  radioSelected: {
-    backgroundColor: "#007AFF",
-    borderColor: "#007AFF",
-  },
-  radioText: {
-    fontSize: 16,
-  },
-  urlDisplay: {
-    fontSize: 14,
-    color: "#666",
-    fontStyle: "italic",
-    marginTop: 4,
   },
   // Menu styles
   menuOptions: {

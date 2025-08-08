@@ -25,30 +25,18 @@ const RealtimeCall: React.FC<RealtimeCallProps> = ({
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState("disconnected");
-  const [isSpeakerOn, setIsSpeakerOn] = useState(true); // デフォルトでスピーカーホン
+  const [isSpeakerOn, setIsSpeakerOn] = useState(true);
 
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
 
-  // Auto-start call when component mounts
-  useEffect(() => {
-    // Initialize InCallManager for call session
-    InCallManager.start({ media: 'audio', auto: false, ringback: false });
-    InCallManager.setKeepScreenOn(true);
-    InCallManager.setForceSpeakerphoneOn(isSpeakerOn);
-    
-    startCall();
-    
-    // Cleanup on component unmount
-    return () => {
-      InCallManager.stop();
-    };
-  }, []);
-
   const createSession = async () => {
     try {
-      const url = serverUrl || process.env.EXPO_PUBLIC_SERVER_URL || "http://localhost:3001";
+      const url =
+        serverUrl ||
+        process.env.EXPO_PUBLIC_SERVER_URL ||
+        "http://localhost:3001";
       const response = await fetch(`${url}/api/session`, {
         method: "POST",
         headers: {
@@ -202,6 +190,19 @@ const RealtimeCall: React.FC<RealtimeCallProps> = ({
     }
   }, [onClose]);
 
+  useEffect(() => {
+    InCallManager.start({ media: "audio", auto: false, ringback: false });
+    InCallManager.setKeepScreenOn(true);
+    InCallManager.setForceSpeakerphoneOn(isSpeakerOn);
+
+    startCall();
+
+    return () => {
+      InCallManager.stop();
+      endCall();
+    };
+  }, []);
+
   const toggleMicrophone = useCallback(() => {
     if (localStreamRef.current) {
       const audioTrack = localStreamRef.current.getAudioTracks()[0];
@@ -215,7 +216,7 @@ const RealtimeCall: React.FC<RealtimeCallProps> = ({
   const toggleSpeaker = useCallback(async () => {
     try {
       const newSpeakerState = !isSpeakerOn;
-      
+
       if (newSpeakerState) {
         // Switch to speakerphone
         InCallManager.setForceSpeakerphoneOn(true);
@@ -227,7 +228,7 @@ const RealtimeCall: React.FC<RealtimeCallProps> = ({
         InCallManager.setSpeakerphoneOn(false);
         console.log("Audio switched to Earpiece");
       }
-      
+
       setIsSpeakerOn(newSpeakerState);
     } catch (error) {
       console.log("Error switching audio output:", error);
@@ -279,13 +280,11 @@ const RealtimeCall: React.FC<RealtimeCallProps> = ({
           <TouchableOpacity
             style={[
               styles.controlButton,
-              { backgroundColor: isSpeakerOn ? "#2196F3" : "#666" },
+              { backgroundColor: isSpeakerOn ? "#2196F3" : "#999" },
             ]}
             onPress={toggleSpeaker}
           >
-            <Text style={styles.controlButtonText}>
-              {isSpeakerOn ? "🔊" : "🔉"}
-            </Text>
+            <Text style={styles.controlButtonText}>スピーカーホン</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.endButton} onPress={endCall}>
@@ -293,7 +292,6 @@ const RealtimeCall: React.FC<RealtimeCallProps> = ({
           </TouchableOpacity>
         </View>
       )}
-
     </View>
   );
 };

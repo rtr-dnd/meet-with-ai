@@ -12,57 +12,72 @@ export const useNotifee = () => {
     return settings.authorizationStatus;
   }, []);
 
-  const scheduleIncomingCall = useCallback(async (agentName?: string) => {
-    await requestPermission();
+  const scheduleIncomingCall = useCallback(
+    async (
+      agentName: string,
+      scheduledTime: Date,
+      agentId: string
+    ): Promise<string> => {
+      await requestPermission();
 
-    const channelId = await notifee.createChannel({
-      id: "incoming-call",
-      name: "Incoming Call",
-      importance: AndroidImportance.HIGH,
-      sound: "default",
-    });
+      const channelId = await notifee.createChannel({
+        id: "incoming-call",
+        name: "Incoming Call",
+        importance: AndroidImportance.HIGH,
+        sound: "default",
+      });
 
-    const trigger: TimestampTrigger = {
-      type: TriggerType.TIMESTAMP,
-      timestamp: Date.now() + 10000,
-    };
+      const trigger: TimestampTrigger = {
+        type: TriggerType.TIMESTAMP,
+        timestamp: scheduledTime.getTime(),
+      };
 
-    await notifee.createTriggerNotification(
-      {
-        title: `📞 ${agentName || "AI Agent"}`,
-        body: "着信通知です - タップして応答",
-        android: {
-          channelId,
-          category: AndroidCategory.CALL,
-          importance: AndroidImportance.HIGH,
-          fullScreenAction: {
-            id: "incoming-call-notification",
+      const notificationId = await notifee.createTriggerNotification(
+        {
+          title: `📞 ${agentName}`,
+          body: "着信通知です - タップして応答",
+          android: {
+            channelId,
+            category: AndroidCategory.CALL,
+            importance: AndroidImportance.HIGH,
+            fullScreenAction: {
+              id: `incoming-call-notification_${agentId}`,
+            },
+            actions: [
+              {
+                title: "📞 応答",
+                pressAction: {
+                  id: `answer_${agentId}`,
+                  launchActivity: "default",
+                },
+              },
+              {
+                title: "❌ 拒否",
+                pressAction: {
+                  id: `decline_${agentId}`,
+                },
+              },
+            ],
           },
-          actions: [
-            {
-              title: "📞 応答",
-              pressAction: {
-                id: "answer",
-                launchActivity: "default",
-              },
-            },
-            {
-              title: "❌ 拒否",
-              pressAction: {
-                id: "decline",
-              },
-            },
-          ],
         },
-      },
-      trigger
-    );
+        trigger
+      );
 
-    console.log("Notification scheduled for 5 seconds later");
-  }, [requestPermission]);
+      console.log(
+        `Notification scheduled for ${scheduledTime.toLocaleString()}`
+      );
+      return notificationId;
+    },
+    [requestPermission]
+  );
 
-  const cancelIncomingCall = useCallback(async () => {
-    await notifee.cancelAllNotifications();
+  const cancelIncomingCall = useCallback(async (notificationId?: string) => {
+    if (notificationId) {
+      await notifee.cancelTriggerNotification(notificationId);
+      await notifee.cancelNotification(notificationId);
+    } else {
+      await notifee.cancelAllNotifications();
+    }
   }, []);
 
   return {

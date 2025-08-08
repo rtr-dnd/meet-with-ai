@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Text,
   View,
@@ -6,32 +6,23 @@ import {
   StyleSheet,
   Alert,
   Modal,
-  AppState,
   TextInput,
+  ToastAndroid,
+  Platform,
 } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import RealtimeCall from "@/components/RealtimeCall";
 import { useNotifee } from "@/hooks/useNotifee";
-import notifee, { EventType } from "@notifee/react-native";
-import IncomingCallNotification from "@/components/IncomingCallNotification";
 import { Stack, useLocalSearchParams } from "expo-router";
-import { ToastAndroid, Platform } from "react-native";
-import { useAtom, useAtomValue } from "jotai";
-import { agentsAtom, currentServerUrlAtom } from "@/store/store";
+import { useAtom } from "jotai";
+import { agentsAtom } from "@/store/store";
+import DateTimePicker from "@react-native-community/datetimepicker";
 
-enum VisibleScreen {
-  Default,
-  RealtimeCall,
-  IncomingCall,
-}
-
-const Index = () => {
+const AgentPage = () => {
   const { id } = useLocalSearchParams();
-  const currentServerUrl = useAtomValue(currentServerUrlAtom);
 
-  const [visibleScreen, setVisibleScreen] = useState<VisibleScreen>(
-    VisibleScreen.Default
-  );
+  const [showScheduleDialog, setShowScheduleDialog] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(new Date());
   const { scheduleIncomingCall, cancelIncomingCall } = useNotifee();
   const [agents, setAgents] = useAtom(agentsAtom);
   const agent = agents.find((e) => e.id === id);
@@ -64,75 +55,6 @@ const Index = () => {
     await setPrompt(newPrompt);
   };
 
-  // check background call status
-  const checkBackgroundCall = async () => {
-    try {
-      const shouldShowCall = await AsyncStorage.getItem(
-        "shouldShowIncomingCall"
-      );
-      const shouldStartCall = await AsyncStorage.getItem(
-        "shouldStartRealtimeCall"
-      );
-
-      if (shouldStartCall === "true") {
-        console.log("Starting realtime call directly from background");
-        setVisibleScreen(VisibleScreen.RealtimeCall);
-      } else if (shouldShowCall === "true") {
-        setVisibleScreen(VisibleScreen.IncomingCall);
-      }
-
-      await AsyncStorage.removeItem("shouldStartRealtimeCall");
-      await AsyncStorage.removeItem("shouldShowIncomingCall");
-    } catch (error) {
-      console.log("Error checking background call:", error);
-    }
-  };
-
-  useEffect(() => {
-    checkBackgroundCall();
-
-    // watch for app state changes
-    const handleAppStateChange = (nextAppState: string) => {
-      console.log("AppState changed to:", nextAppState);
-      if (nextAppState === "active") {
-        console.log("App became active, checking background call");
-        checkBackgroundCall();
-      }
-    };
-
-    const subscription = AppState.addEventListener(
-      "change",
-      handleAppStateChange
-    );
-
-    return () => {
-      subscription?.remove();
-    };
-  }, []);
-
-  useEffect(() => {
-    const unsubscribe = notifee.onForegroundEvent(({ type, detail }) => {
-      console.log("Foreground event:", type, detail);
-
-      if (type === EventType.ACTION_PRESS) {
-        console.log("Action pressed:", detail.pressAction?.id);
-        if (detail.pressAction?.id === "answer") {
-          console.log("Answer action - starting call");
-          cancelIncomingCall();
-          setVisibleScreen(VisibleScreen.RealtimeCall);
-        } else if (detail.pressAction?.id === "decline") {
-          console.log("Decline action - dismissing call");
-          cancelIncomingCall();
-          setVisibleScreen(VisibleScreen.Default);
-        }
-      }
-    });
-
-    return () => {
-      unsubscribe();
-    };
-  }, [cancelIncomingCall]);
-
   const showToast = (message: string) => {
     if (Platform.OS === "android") {
       ToastAndroid.show(message, ToastAndroid.SHORT);
@@ -142,15 +64,92 @@ const Index = () => {
     }
   };
 
-  const triggerIncomingCall = async () => {
+  const scheduleCall = async () => {
+    if (!agentName) {
+      Alert.alert("エラー", "エージェント名が設定されていません");
+      return;
+    }
+
+    if (selectedDate <= new Date()) {
+      Alert.alert("エラー", "未来の日時を選択してください");
+      return;
+    }
+
     try {
-      showToast("10秒後に着信通知を表示します");
-      await scheduleIncomingCall(agentName);
+      // Cancel existing notification if any
+      if (agent?.params.notificationId) {
+        await cancelIncomingCall(agent.params.notificationId);
+      }
+
+      const notificationId = await scheduleIncomingCall(
+        agentName,
+        selectedDate,
+        id as string
+      );
+      console.log("Generated notification ID:", notificationId);
+
+      // Update agent with notification ID and scheduled time
+      await setPrompt(prompt || "");
+      const updatedAgents = agents.map((a) =>
+        a.id === agent?.id
+          ? {
+              ...a,
+              params: {
+                ...a.params,
+                notificationId,
+                scheduledTime: selectedDate.toISOString(),
+              },
+            }
+          : a
+      );
+      await setAgents(updatedAgents);
+      console.log("Agent updated with notification ID:", notificationId);
+
+      showToast(`${selectedDate.toLocaleString()}に通話を予約しました`);
     } catch (error) {
       console.log("Error scheduling notification:", error);
       Alert.alert("エラー", "通知の設定に失敗しました");
     }
   };
+
+  const cancelScheduledCall = async () => {
+    if (agent?.params.notificationId) {
+      try {
+        console.log("Cancelling notification:", agent.params.notificationId);
+        await cancelIncomingCall(agent.params.notificationId);
+        const updatedAgents = agents.map((a) =>
+          a.id === agent?.id
+            ? {
+                ...a,
+                params: {
+                  ...a.params,
+                  notificationId: undefined,
+                  scheduledTime: undefined,
+                },
+              }
+            : a
+        );
+        await setAgents(updatedAgents);
+        showToast("予約をキャンセルしました");
+        console.log("Notification cancelled successfully");
+      } catch (error) {
+        console.log("Error cancelling notification:", error);
+        Alert.alert("エラー", "予約のキャンセルに失敗しました");
+      }
+    } else {
+      console.log("No notification ID found to cancel");
+    }
+  };
+
+  const [now, setNow] = useState<number>(Date.now());
+  useEffect(() => {
+    const updateNow = setInterval(() => {
+      setNow(Date.now());
+    }, 60000);
+    return () => {
+      clearInterval(updateNow);
+    };
+  }, []);
 
   return (
     <>
@@ -184,70 +183,136 @@ const Index = () => {
             style={styles.input}
           />
         </View>
-        <TouchableOpacity
-          style={styles.incomingCallButton}
-          onPress={triggerIncomingCall}
-        >
-          <Text style={styles.incomingCallButtonText}>10秒後に通話を予約</Text>
-        </TouchableOpacity>
+        {agent?.params.scheduledTime &&
+        new Date(agent.params.scheduledTime).getTime() > now ? (
+          <View style={styles.scheduledInfo}>
+            <Text style={styles.scheduledText}>
+              予約済み: {new Date(agent.params.scheduledTime).toLocaleString()}
+            </Text>
+            <TouchableOpacity
+              style={styles.cancelButton}
+              onPress={cancelScheduledCall}
+            >
+              <Text style={styles.cancelButtonText}>キャンセル</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <TouchableOpacity
+            style={styles.scheduleButton}
+            onPress={() => {
+              setSelectedDate(new Date());
+              setShowScheduleDialog(true);
+            }}
+          >
+            <Text style={styles.scheduleButtonText}>通話を予約</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
+      {/* Schedule Dialog */}
       <Modal
-        visible={visibleScreen === VisibleScreen.IncomingCall}
+        visible={showScheduleDialog}
+        transparent={true}
         animationType="fade"
-        presentationStyle="fullScreen"
+        onRequestClose={() => setShowScheduleDialog(false)}
       >
-        <IncomingCallNotification
-          onAnswer={() => {
-            setVisibleScreen(VisibleScreen.RealtimeCall);
-          }}
-          onDecline={() => {
-            setVisibleScreen(VisibleScreen.Default);
-          }}
-          callerName={agentName}
-        />
+        <View style={styles.dialogOverlay}>
+          <View style={styles.dialogContainer}>
+            <Text style={styles.dialogTitle}>通話を予約</Text>
+
+            <View style={styles.dialogContent}>
+              <Text style={styles.sectionLabel}>日付</Text>
+              <TouchableOpacity
+                style={styles.pickerButton}
+                onPress={() => setShowDatePicker(true)}
+              >
+                <Text style={styles.pickerButtonText}>
+                  {selectedDate.toLocaleDateString()}
+                </Text>
+              </TouchableOpacity>
+
+              <Text style={styles.sectionLabel}>時刻</Text>
+              <TouchableOpacity
+                style={styles.pickerButton}
+                onPress={() => setShowTimePicker(true)}
+              >
+                <Text style={styles.pickerButtonText}>
+                  {selectedDate.toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </Text>
+              </TouchableOpacity>
+
+              <Text style={styles.selectedTimeText}>
+                選択済み: {selectedDate.toLocaleString()}
+              </Text>
+            </View>
+
+            <View style={styles.dialogButtons}>
+              <TouchableOpacity
+                style={[styles.dialogButton, styles.cancelDialogButton]}
+                onPress={() => setShowScheduleDialog(false)}
+              >
+                <Text style={styles.cancelDialogButtonText}>キャンセル</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.dialogButton, styles.confirmDialogButton]}
+                onPress={async () => {
+                  setShowScheduleDialog(false);
+                  await scheduleCall();
+                }}
+              >
+                <Text style={styles.confirmDialogButtonText}>予約</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
       </Modal>
 
-      <Modal
-        visible={visibleScreen === VisibleScreen.RealtimeCall}
-        animationType="slide"
-        presentationStyle="fullScreen"
-      >
-        <RealtimeCall
-          onClose={() => setVisibleScreen(VisibleScreen.Default)}
-          prompt={prompt}
-          agentName={agentName}
-          serverUrl={currentServerUrl}
+      {/* Date Picker */}
+      {showDatePicker && (
+        <DateTimePicker
+          value={selectedDate}
+          mode="date"
+          display="default"
+          onChange={(event, date) => {
+            setShowDatePicker(false);
+            if (event.type === "set" && date) {
+              const newDate = new Date(selectedDate);
+              newDate.setFullYear(
+                date.getFullYear(),
+                date.getMonth(),
+                date.getDate()
+              );
+              setSelectedDate(newDate);
+            }
+          }}
         />
-      </Modal>
+      )}
+
+      {/* Time Picker */}
+      {showTimePicker && (
+        <DateTimePicker
+          value={selectedDate}
+          mode="time"
+          display="default"
+          onChange={(event, time) => {
+            setShowTimePicker(false);
+            if (event.type === "set" && time) {
+              const newDate = new Date(selectedDate);
+              newDate.setHours(time.getHours(), time.getMinutes());
+              setSelectedDate(newDate);
+            }
+          }}
+        />
+      )}
     </>
   );
 };
 
-notifee.onBackgroundEvent(async ({ type, detail }) => {
-  console.log("Background event:", type, detail);
-
-  if (type === EventType.ACTION_PRESS) {
-    if (detail.pressAction?.id === "answer") {
-      await AsyncStorage.setItem("shouldStartRealtimeCall", "true");
-      console.log("Answer pressed in background, setting realtime call flag");
-    } else if (detail.pressAction?.id === "decline") {
-      await notifee.cancelAllNotifications();
-      console.log("Decline pressed in background");
-    }
-  }
-
-  if (
-    (type === EventType.PRESS || type === EventType.DELIVERED) &&
-    detail.notification?.android?.fullScreenAction?.id ===
-      "incoming-call-notification"
-  ) {
-    console.log("Fullscreen notification triggered in background");
-    await AsyncStorage.setItem("shouldShowIncomingCall", "true");
-  }
-});
-
-export default Index;
+export default AgentPage;
 
 const styles = StyleSheet.create({
   container: {
@@ -271,16 +336,124 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
     fontSize: 16,
   },
-  incomingCallButton: {
-    backgroundColor: "#000000",
-    paddingHorizontal: 40,
-    paddingVertical: 16,
-    borderRadius: 25,
+  scheduledInfo: {
+    backgroundColor: "#e8f5e8",
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 12,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  scheduledText: {
+    color: "#2e7d32",
+    fontSize: 14,
+    flex: 1,
+  },
+  cancelButton: {
+    backgroundColor: "#f44336",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 4,
+  },
+  cancelButtonText: {
+    color: "white",
+    fontSize: 12,
+    fontWeight: "bold",
+  },
+  scheduleButton: {
+    backgroundColor: "#4caf50",
+    padding: 16,
+    borderRadius: 8,
     marginTop: 16,
   },
-  incomingCallButtonText: {
+  scheduleButtonText: {
     color: "white",
     fontSize: 18,
     fontWeight: "bold",
+    textAlign: "center",
+  },
+  // Dialog styles
+  dialogOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  dialogContainer: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    minWidth: 320,
+    maxWidth: "90%",
+  },
+  dialogTitle: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#333",
+    textAlign: "center",
+    paddingTop: 20,
+    paddingBottom: 16,
+  },
+  dialogContent: {
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+  },
+  sectionLabel: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#333",
+    marginBottom: 8,
+    marginTop: 12,
+  },
+  pickerButton: {
+    backgroundColor: "#f5f5f5",
+    borderWidth: 1,
+    borderColor: "#ddd",
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    marginBottom: 8,
+  },
+  pickerButtonText: {
+    fontSize: 16,
+    color: "#333",
+    textAlign: "center",
+  },
+  selectedTimeText: {
+    fontSize: 16,
+    color: "#4caf50",
+    fontWeight: "600",
+    textAlign: "center",
+    marginTop: 16,
+    padding: 12,
+    backgroundColor: "#f0f8f0",
+    borderRadius: 8,
+  },
+  dialogButtons: {
+    flexDirection: "row",
+    borderTopWidth: 1,
+    borderTopColor: "#e0e0e0",
+  },
+  dialogButton: {
+    flex: 1,
+    paddingVertical: 16,
+    alignItems: "center",
+  },
+  cancelDialogButton: {
+    borderRightWidth: 1,
+    borderRightColor: "#e0e0e0",
+  },
+  confirmDialogButton: {
+    backgroundColor: "transparent",
+  },
+  cancelDialogButtonText: {
+    fontSize: 16,
+    color: "#666",
+  },
+  confirmDialogButtonText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#4caf50",
   },
 });

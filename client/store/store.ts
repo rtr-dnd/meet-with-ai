@@ -9,6 +9,8 @@ const storage = createJSONStorage<any>(() => AsyncStorage);
 export interface AgentParams {
   name: string;
   prompt: string;
+  notificationId?: string;
+  scheduledTime?: string;
 }
 
 export const DEFAULT_AGENT_PARAMS: AgentParams = {
